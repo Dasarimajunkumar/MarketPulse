@@ -33,6 +33,7 @@ console.log(`[CONFIG] Port: ${config.port} | Mode: ${config.isProduction ? 'PROD
 
 // Database Pool Connection Setup
 let pgPool = null;
+let isDatabaseReady = false;
 
 if (config.databaseUrl && (config.databaseUrl.startsWith('postgres://') || config.databaseUrl.startsWith('postgresql://'))) {
   try {
@@ -58,12 +59,16 @@ if (config.databaseUrl && (config.databaseUrl.startsWith('postgres://') || confi
 }
 
 async function initDatabaseSchema() {
-  if (!pgPool) return;
+  if (!pgPool) {
+    isDatabaseReady = false;
+    return false;
+  }
   try {
     const client = await pgPool.connect();
     try {
+      // 1. Execute Table Migrations with Schema Qualification
       await client.query(`
-        CREATE TABLE IF NOT EXISTS market_events (
+        CREATE TABLE IF NOT EXISTS public.market_events (
           id VARCHAR(120) PRIMARY KEY,
           canonical_title TEXT NOT NULL,
           title TEXT NOT NULL,
@@ -88,16 +93,24 @@ async function initDatabaseSchema() {
           source_retrieval_status VARCHAR(20)
         );
 
-        CREATE TABLE IF NOT EXISTS fcm_tokens (
+        CREATE TABLE IF NOT EXISTS public.fcm_tokens (
           token TEXT PRIMARY KEY,
           device_id VARCHAR(100),
           registered_at BIGINT
         );
       `);
-      console.log('[DATABASE] PostgreSQL Schema verified.');
 
-      // Load existing canonical events from PostgreSQL into memory on startup
-      const res = await client.query('SELECT * FROM market_events ORDER BY publication_time DESC LIMIT 200');
+      // 2. Strict Verification of Table Existence in PostgreSQL Metadata Catalog
+      const checkRes = await client.query("SELECT to_regclass('public.market_events') as rel_name;");
+      if (!checkRes.rows[0] || !checkRes.rows[0].rel_name) {
+        throw new Error('Table public.market_events was not found in PostgreSQL catalog after schema creation.');
+      }
+
+      console.log('[DATABASE] PostgreSQL Schema verified: public.market_events exists.');
+      isDatabaseReady = true;
+
+      // 3. Load existing canonical events from PostgreSQL into memory on startup
+      const res = await client.query('SELECT * FROM public.market_events ORDER BY publication_time DESC LIMIT 200');
       if (res.rows.length > 0) {
         canonicalEvents = res.rows.map(row => ({
           id: row.id,
@@ -125,21 +138,19 @@ async function initDatabaseSchema() {
         }));
         console.log(`[DATABASE] Loaded ${canonicalEvents.length} persisted canonical events from PostgreSQL.`);
       }
+      return true;
     } finally {
       client.release();
     }
   } catch (err) {
+    isDatabaseReady = false;
+    console.error('[CRITICAL DATABASE ERR] Failed initializing PostgreSQL schema:', err.message);
     if (config.isProduction) {
-      console.error('[CRITICAL FATAL ERROR] Schema initialization failed in production mode:', err.message);
+      console.error('[CRITICAL FATAL ERROR] Terminating process due to DB schema initialization failure in production mode.');
       process.exit(1);
-    } else {
-      console.error('[DATABASE ERR] Failed initializing PostgreSQL schema:', err.message);
     }
+    return false;
   }
-}
-
-if (pgPool) {
-  initDatabaseSchema();
 }
 
 if (!config.geminiApiKey || config.geminiApiKey === 'MY_GEMINI_API_KEY') {
@@ -269,7 +280,7 @@ const SOURCE_REGISTRY = [
     writtenPermissionReference: null,
     lastRightsReviewedAt: Date.now(),
     pollIntervalMs: 0,
-    status: 'ONLINE',
+    status: 'RIGHTS_RESTRICTED',
     lastCheck: Date.now(),
     lastRefresh: Date.now(),
     errorMessage: null
@@ -357,9 +368,9 @@ function getSeedEvents() {
       summary: 'SEBI has issued a circular revising the equity derivatives framework. Minimum contract value raised from ₹5 lakh to ₹15 lakh, and each exchange is limited to only one weekly index expiry contract to curb retail speculative trading.',
       beginnerExplainer: 'WHAT HAPPENED:\nSEBI has made trading in options more expensive to protect individual retail traders.\n\nWHY IT MATTERS:\nTrading volume in NIFTY and SENSEX weekly options will reduce. Brokerages and stock exchanges may see a mild dip in transaction revenues, but systemic risk is significantly lower.',
       category: 'REGULATORY',
-      publisher: 'SEBI',
+      publisher: 'SEBI Official Releases & Circulars',
       sourceType: 'OFFICIAL_REGULATOR',
-      sourceName: 'SEBI Press Release',
+      sourceName: 'SEBI Official Releases & Circulars',
       sourceUrl: 'https://www.sebi.gov.in/legal/circulars/index-derivatives.html',
       officialDocumentUrl: 'https://www.sebi.gov.in/legal/circulars/index-derivatives-2026.html',
       publicationTime: now - (15 * 60 * 1000),
@@ -386,9 +397,9 @@ function getSeedEvents() {
       summary: 'L&T\'s Hydrocarbon business vertical has won a prestigious offshore package from an international energy major. Scope includes engineering, procurement, construction, and installation of gas compression facilities.',
       beginnerExplainer: 'WHAT HAPPENED:\nL&T won a massive construction and engineering contract in the Middle East worth over ₹4,500 Crore.\n\nWHY IT MATTERS:\nAdds strongly to L&T\'s multi-year order book and ensures high revenue visibility for the next 3 to 4 fiscal years.',
       category: 'CONTRACT_WIN',
-      publisher: 'NSE',
+      publisher: 'NSE Corporate Disclosures Feed',
       sourceType: 'STOCK_EXCHANGE',
-      sourceName: 'NSE Corporate Filing',
+      sourceName: 'NSE Corporate Disclosures Feed',
       sourceUrl: 'https://www.nseindia.com/companies-listing/corporate-filings',
       officialDocumentUrl: 'https://www.nseindia.com/filings/LT-EPC-2026.pdf',
       publicationTime: now - (45 * 60 * 1000),
@@ -507,11 +518,12 @@ function resolveEntity(text) {
   return { symbol: 'MACRO', name: 'Indian Markets', sector: 'General Macro' };
 }
 
+// Persist Canonical Event to PostgreSQL with Explicit Error Return
 async function persistCanonicalEventToDb(event) {
-  if (!pgPool) return;
+  if (!pgPool) return true; // Local development in-memory mode
   try {
     await pgPool.query(
-      `INSERT INTO market_events (
+      `INSERT INTO public.market_events (
         id, canonical_title, title, summary, beginner_explainer, category,
         publisher, source_type, source_name, source_url, official_document_url,
         publication_time, event_time, detected_time, ingested_time, formatted_time,
@@ -525,8 +537,10 @@ async function persistCanonicalEventToDb(event) {
         event.entitySymbol, event.entityName, event.sector, event.materiality, event.verificationType, event.sourceRetrievalStatus
       ]
     );
+    return true;
   } catch (err) {
-    console.error('[DATABASE ERR] Failed persisting event to DB:', err.message);
+    console.error(`[DATABASE ERR] Failed persisting event ${event.id} to public.market_events:`, err.message);
+    return false;
   }
 }
 
@@ -692,12 +706,14 @@ async function fetchLiveMarketIndices() {
 
 // Ingestion Engine: Fetch and Parse Feeds (XML & JSON) with Rights Enforcement Guard
 async function pollSource(source) {
+  const displayName = source.sourceName || source.publisherName || source.id;
+
   // Strict Content Rights Enforcement Guard
   if (source.rightsStatus === 'PAUSED_PENDING_PERMISSION' || source.rightsStatus === 'RIGHTS_RESTRICTED' || source.rightsStatus === 'LINK_ONLY') {
     source.lastCheck = Date.now();
     source.status = 'RIGHTS_RESTRICTED';
     source.errorMessage = 'Automated background ingestion paused pending written commercial redistribution license agreement.';
-    console.log(`[RIGHTS GUARD] Skipped automated RSS polling for ${source.name} (Rights Status: ${source.rightsStatus})`);
+    console.log(`[RIGHTS GUARD] Skipped automated RSS polling for ${displayName} (Rights Status: ${source.rightsStatus})`);
     return;
   }
 
@@ -716,6 +732,7 @@ async function pollSource(source) {
     }
 
     let newCount = 0;
+    let failedPersistCount = 0;
 
     if (source.type === 'JSON') {
       const jsonData = await response.json();
@@ -747,9 +764,9 @@ async function pollSource(source) {
             summary: summaryText.substring(0, 300),
             beginnerExplainer: `WHAT HAPPENED:\n${summaryText}\n\nSOURCE:\nNSE Official Disclosure Archive`,
             category: 'DISCLOSURE',
-            publisher: 'NSE Official',
+            publisher: displayName,
             sourceType: 'STOCK_EXCHANGE',
-            sourceName: 'NSE Corporate Announcements',
+            sourceName: displayName,
             sourceUrl: documentUrl,
             officialDocumentUrl: documentUrl,
             publicationTime: isNaN(pubTime) ? Date.now() : pubTime,
@@ -770,9 +787,13 @@ async function pollSource(source) {
             filingId: item.seq_id || null
           };
 
-          canonicalEvents.unshift(event);
-          await persistCanonicalEventToDb(event);
-          newCount++;
+          const persisted = await persistCanonicalEventToDb(event);
+          if (persisted) {
+            canonicalEvents.unshift(event);
+            newCount++;
+          } else {
+            failedPersistCount++;
+          }
         }
       }
     } else {
@@ -813,11 +834,11 @@ async function pollSource(source) {
             canonicalTitle: canonicalTitle,
             title: title,
             summary: summary.substring(0, 300),
-            beginnerExplainer: `WHAT HAPPENED:\n${title}\n\nSOURCE:\n${source.name}\n\nVERIFICATION STATUS:\n${verificationType}`,
+            beginnerExplainer: `WHAT HAPPENED:\n${title}\n\nSOURCE:\n${displayName}\n\nVERIFICATION STATUS:\n${verificationType}`,
             category: source.category === 'OFFICIAL_REGULATOR' ? 'REGULATORY' : 'DISCLOSURE',
-            publisher: source.name,
+            publisher: displayName,
             sourceType: source.category,
-            sourceName: source.name,
+            sourceName: displayName,
             sourceUrl: link,
             officialDocumentUrl: source.category === 'OFFICIAL_REGULATOR' ? link : null,
             publicationTime: isNaN(pubTime) ? Date.now() : pubTime,
@@ -837,21 +858,31 @@ async function pollSource(source) {
             isBookmarked: false
           };
 
-          canonicalEvents.unshift(event);
-          await persistCanonicalEventToDb(event);
-          newCount++;
+          const persisted = await persistCanonicalEventToDb(event);
+          if (persisted) {
+            canonicalEvents.unshift(event);
+            newCount++;
+          } else {
+            failedPersistCount++;
+          }
         }
       }
     }
 
-    source.status = 'ONLINE';
-    source.lastRefresh = Date.now();
-    source.errorMessage = null;
-    console.log(`[INGESTION] Successfully polled ${source.name}: ${newCount} new canonical events ingested.`);
+    if (failedPersistCount > 0 && newCount === 0) {
+      source.status = 'DEGRADED';
+      source.errorMessage = `Database persistence failed for ${failedPersistCount} parsed items.`;
+      console.error(`[INGESTION ERR] Polled ${displayName}: DB write failed for ${failedPersistCount} items.`);
+    } else {
+      source.status = 'ONLINE';
+      source.lastRefresh = Date.now();
+      source.errorMessage = null;
+      console.log(`[INGESTION] Successfully polled ${displayName}: ${newCount} new canonical events persisted to database.`);
+    }
   } catch (err) {
     source.status = 'DEGRADED';
     source.errorMessage = err.message;
-    console.error(`[INGESTION ERROR] Failed polling ${source.name}: ${err.message}`);
+    console.error(`[INGESTION ERROR] Failed polling ${displayName}: ${err.message}`);
   }
 }
 
@@ -860,9 +891,15 @@ let schedulerTimers = [];
 function startIngestionScheduler() {
   if (schedulerTimers.length > 0) return; // Prevent duplicate scheduler instances
   SOURCE_REGISTRY.forEach(source => {
-    pollSource(source);
+    pollSource(source).catch(err => {
+      console.error(`[SCHEDULER ERR] Background poll failed for ${source.sourceName || source.id}:`, err.message);
+    });
     if (source.pollIntervalMs > 0 && source.rightsStatus === 'PERMISSION_CONFIRMED') {
-      const timer = setInterval(() => pollSource(source), source.pollIntervalMs);
+      const timer = setInterval(() => {
+        pollSource(source).catch(err => {
+          console.error(`[SCHEDULER ERR] Interval poll failed for ${source.sourceName || source.id}:`, err.message);
+        });
+      }, source.pollIntervalMs);
       schedulerTimers.push(timer);
     }
   });
@@ -874,18 +911,23 @@ app.get('/health', (req, res) => {
     status: 'UP',
     service: 'marketpulse-backend',
     uptimeSeconds: Math.floor(process.uptime()),
-    databaseConnected: pgPool !== null,
+    databaseConnected: pgPool !== null && isDatabaseReady,
     timestamp: Date.now()
   });
 });
 
 app.get('/readiness', (req, res) => {
   const onlineSources = SOURCE_REGISTRY.filter(s => s.status === 'ONLINE').length;
-  const isReady = onlineSources > 0;
+
+  // Truthful Readiness Check: In production mode, DB must be ready
+  const isDbReady = !pgPool || isDatabaseReady;
+  const isReady = onlineSources > 0 && isDbReady;
+
   res.status(isReady ? 200 : 503).json({
     status: isReady ? 'READY' : 'NOT_READY',
     onlineSources,
     totalSources: SOURCE_REGISTRY.length,
+    databaseConnected: isDatabaseReady,
     canonicalEventsCount: canonicalEvents.length
   });
 });
@@ -893,7 +935,15 @@ app.get('/readiness', (req, res) => {
 // REST Endpoints with Rights Enforcement Guard
 app.get('/api/v1/news', (req, res) => {
   const { category, source, entity, query } = req.query;
-  let result = [...canonicalEvents];
+
+  // Filter out any events from paused/unlicensed sources
+  let result = canonicalEvents.filter(e => {
+    const matchedSource = SOURCE_REGISTRY.find(s => s.sourceName === e.sourceName || s.publisherName === e.publisher);
+    if (matchedSource) {
+      return matchedSource.rightsStatus === 'PERMISSION_CONFIRMED';
+    }
+    return true; // Allow official seed events
+  });
 
   if (category && category !== 'ALL') {
     result = result.filter(e => e.category.toLowerCase() === category.toLowerCase() || e.entitySymbol.toLowerCase() === category.toLowerCase());
@@ -930,7 +980,7 @@ app.get('/api/v1/sources', (req, res) => {
     status: 'success',
     sources: SOURCE_REGISTRY.map(s => ({
       sourceId: s.id,
-      sourceName: s.sourceName || s.name,
+      sourceName: s.sourceName || s.publisherName || s.id,
       publisherName: s.publisherName,
       sourceType: s.category,
       feedUrl: s.url,
@@ -993,9 +1043,9 @@ app.post('/api/v1/notifications/register-token', async (req, res) => {
     return res.status(400).json({ status: 'error', message: 'FCM Token is required' });
   }
   fcmTokens.add(token);
-  if (pgPool) {
+  if (pgPool && isDatabaseReady) {
     try {
-      await pgPool.query('INSERT INTO fcm_tokens (token, device_id, registered_at) VALUES ($1, $2, $3) ON CONFLICT (token) DO NOTHING', [token, deviceId || 'unknown', Date.now()]);
+      await pgPool.query('INSERT INTO public.fcm_tokens (token, device_id, registered_at) VALUES ($1, $2, $3) ON CONFLICT (token) DO NOTHING', [token, deviceId || 'unknown', Date.now()]);
     } catch (_e) {}
   }
   console.log(`[FCM REGISTER] Registered device token from device: ${deviceId || 'unknown'}`);
@@ -1108,27 +1158,48 @@ CRITICAL SECURITY & GROUNDING INSTRUCTIONS:
   });
 });
 
-const serverInstance = app.listen(PORT, () => {
-  console.log(`[MARKETPULSE BACKEND] Running on port ${PORT}`);
-  startIngestionScheduler();
-});
+let serverInstance = null;
+
+async function startServer() {
+  if (pgPool) {
+    await initDatabaseSchema();
+  }
+
+  serverInstance = app.listen(PORT, () => {
+    console.log(`[MARKETPULSE BACKEND] Running on port ${PORT}`);
+    startIngestionScheduler();
+  });
+
+  return serverInstance;
+}
+
+// Start Server if executed directly
+if (require.main === module) {
+  startServer();
+}
 
 // Safe Process Graceful Shutdown
 function gracefulShutdown(signal) {
   console.log(`[SHUTDOWN] Received ${signal}. Closing server gracefully...`);
   schedulerTimers.forEach(t => clearInterval(t));
-  serverInstance.close(() => {
-    console.log('[SHUTDOWN] HTTP server closed.');
-    if (pgPool) {
-      pgPool.end(() => {
-        console.log('[SHUTDOWN] PostgreSQL pool closed.');
+  if (serverInstance) {
+    serverInstance.close(() => {
+      console.log('[SHUTDOWN] HTTP server closed.');
+      if (pgPool) {
+        pgPool.end(() => {
+          console.log('[SHUTDOWN] PostgreSQL pool closed.');
+          process.exit(0);
+        });
+      } else {
         process.exit(0);
-      });
-    } else {
-      process.exit(0);
-    }
-  });
+      }
+    });
+  } else {
+    process.exit(0);
+  }
 }
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+module.exports = { app, startServer, initDatabaseSchema, pollSource, SOURCE_REGISTRY };
