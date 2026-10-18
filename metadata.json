@@ -1,0 +1,6 @@
+{
+  "name": "MarketPulse",
+  "description": "Daily Indian financial intelligence, corporate filings, SEBI/RBI circulars, and paper trading.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

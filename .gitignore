@@ -1,0 +1,41 @@
+# Gradle / Kotlin / Android
+*.iml
+.gradle
+.kotlin
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Environment & Secrets (NEVER COMMIT)
+.env
+.env.local
+.env.production
+*.jks
+*.keystore
+debug.keystore
+google-services.json
+
+# Node.js
+node_modules/
+npm-debug.log
+
+# Additional generated and local files
+.aistudio/
+.idea/
+**/build/
+**/node_modules/
+marketpulse.zip
+
+# Ignore all environment variants, but keep the safe example template
+.env.*
+!.env.example
