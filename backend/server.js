@@ -15,11 +15,13 @@ const { Pool } = require('pg');
 require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = parseInt(process.env.PORT || '8080', 10);
+const HOST = process.env.HOST || '0.0.0.0';
 
 // Configuration Validation & Startup Checks
 const config = {
   port: PORT,
+  host: HOST,
   databaseUrl: process.env.DATABASE_URL || null,
   geminiApiKey: process.env.GEMINI_API_KEY || null,
   firebaseServiceAccount: process.env.FIREBASE_SERVICE_ACCOUNT || null,
@@ -29,7 +31,7 @@ const config = {
 };
 
 console.log('[CONFIG] Initializing MarketPulse Backend Service');
-console.log(`[CONFIG] Port: ${config.port} | Mode: ${config.isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
+console.log(`[CONFIG] Listening Address: ${config.host}:${config.port} | Mode: ${config.isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
 
 // Database Pool Connection Setup
 let pgPool = null;
@@ -905,8 +907,30 @@ function startIngestionScheduler() {
   });
 }
 
-// Liveness & Readiness Probes
-app.get('/health', (req, res) => {
+// Base Service Info Overview Route
+app.get('/', (req, res) => {
+  res.json({
+    service: 'marketpulse-backend',
+    status: 'ONLINE',
+    version: '1.0.0',
+    description: 'Production Financial Intelligence Backend & Live Source Ingestion Engine',
+    endpoints: {
+      health: '/health',
+      readiness: '/readiness',
+      apiHealth: '/api/v1/health',
+      news: '/api/v1/news',
+      sources: '/api/v1/sources',
+      marketIndices: '/api/v1/market/indices',
+      alerts: '/api/v1/alerts',
+      chat: '/api/v1/chat',
+      registerFcmToken: '/api/v1/notifications/register-token'
+    },
+    timestamp: Date.now()
+  });
+});
+
+// Liveness Probes
+const healthHandler = (req, res) => {
   res.json({
     status: 'UP',
     service: 'marketpulse-backend',
@@ -914,12 +938,16 @@ app.get('/health', (req, res) => {
     databaseConnected: pgPool !== null && isDatabaseReady,
     timestamp: Date.now()
   });
-});
+};
 
-app.get('/readiness', (req, res) => {
+app.get('/health', healthHandler);
+app.get('/api/v1/health', healthHandler);
+
+// Readiness Probes
+const readinessHandler = (req, res) => {
   const onlineSources = SOURCE_REGISTRY.filter(s => s.status === 'ONLINE').length;
 
-  // Truthful Readiness Check: In production mode, DB must be ready
+  // Truthful Readiness Check: In production mode or when DB pool is initialized, DB must be ready
   const isDbReady = !pgPool || isDatabaseReady;
   const isReady = onlineSources > 0 && isDbReady;
 
@@ -928,9 +956,13 @@ app.get('/readiness', (req, res) => {
     onlineSources,
     totalSources: SOURCE_REGISTRY.length,
     databaseConnected: isDatabaseReady,
-    canonicalEventsCount: canonicalEvents.length
+    canonicalEventsCount: canonicalEvents.length,
+    timestamp: Date.now()
   });
-});
+};
+
+app.get('/readiness', readinessHandler);
+app.get('/api/v1/readiness', readinessHandler);
 
 // REST Endpoints with Rights Enforcement Guard
 app.get('/api/v1/news', (req, res) => {
@@ -1158,6 +1190,26 @@ CRITICAL SECURITY & GROUNDING INSTRUCTIONS:
   });
 });
 
+// Structured Catch-All 404 Route Handler
+app.use((req, res) => {
+  res.status(404).json({
+    status: 'error',
+    message: `Route not found: ${req.method} ${req.originalUrl}`,
+    availableEndpoints: [
+      '/',
+      '/health',
+      '/readiness',
+      '/api/v1/health',
+      '/api/v1/readiness',
+      '/api/v1/news',
+      '/api/v1/sources',
+      '/api/v1/market/indices',
+      '/api/v1/alerts',
+      '/api/v1/chat'
+    ]
+  });
+});
+
 let serverInstance = null;
 
 async function startServer() {
@@ -1165,8 +1217,8 @@ async function startServer() {
     await initDatabaseSchema();
   }
 
-  serverInstance = app.listen(PORT, () => {
-    console.log(`[MARKETPULSE BACKEND] Running on port ${PORT}`);
+  serverInstance = app.listen(PORT, HOST, () => {
+    console.log(`[MARKETPULSE BACKEND] Listening on http://${HOST}:${PORT}`);
     startIngestionScheduler();
   });
 
