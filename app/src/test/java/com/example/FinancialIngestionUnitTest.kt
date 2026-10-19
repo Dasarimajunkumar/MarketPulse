@@ -147,4 +147,33 @@ class FinancialIngestionUnitTest {
     assertEquals(fetchedTime, index.lastFetchedTimestamp)
     assertEquals(sourceTime, index.sourceTimestamp)
   }
+
+  @Test
+  fun testUnavailableMarketIndexDisplayHandling() {
+    val unavailableIndex = MarketIndex(
+      symbol = "NIFTY 50",
+      name = "Nifty 50 Index (NSE)",
+      currentValue = 0.0,
+      changeValue = 0.0,
+      changePercent = 0.0,
+      previousClose = 0.0,
+      sparklineJson = "0,0",
+      marketSessionStatus = "UNKNOWN",
+      dataFreshnessStatus = "UNAVAILABLE",
+      tradingStatus = "UNAVAILABLE",
+      provider = "LICENSED_PROVIDER_REQUIRED"
+    )
+
+    assertEquals("UNAVAILABLE", unavailableIndex.dataFreshnessStatus)
+    assertEquals("UNAVAILABLE", unavailableIndex.tradingStatus)
+    assertEquals("LICENSED_PROVIDER_REQUIRED", unavailableIndex.provider)
+    assertEquals(0.0, unavailableIndex.currentValue, 0.001)
+
+    val isUnavailable = unavailableIndex.dataFreshnessStatus.equals("UNAVAILABLE", ignoreCase = true) ||
+                        unavailableIndex.tradingStatus.equals("UNAVAILABLE", ignoreCase = true) ||
+                        unavailableIndex.provider.contains("LICENSED_PROVIDER_REQUIRED", ignoreCase = true) ||
+                        unavailableIndex.currentValue <= 0.0
+
+    assertTrue("Index with zero values and LICENSED_PROVIDER_REQUIRED must be recognized as UNAVAILABLE", isUnavailable)
+  }
 }

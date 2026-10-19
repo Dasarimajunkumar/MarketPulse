@@ -21,7 +21,7 @@ android {
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-    val configuredApiUrl = System.getenv("MARKETPULSE_API_URL") ?: "http://10.0.2.2:8080/"
+    val configuredApiUrl = System.getenv("MARKETPULSE_API_URL") ?: "https://marketpulse-backend-lzs6.onrender.com/"
     buildConfigField("String", "DEFAULT_API_BASE_URL", "\"$configuredApiUrl\"")
   }
 
@@ -51,11 +51,11 @@ android {
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
-      buildConfigField("String", "DEFAULT_API_BASE_URL", "\"${System.getenv("MARKETPULSE_API_URL") ?: ""}\"")
+      buildConfigField("String", "DEFAULT_API_BASE_URL", "\"${System.getenv("MARKETPULSE_API_URL") ?: "https://marketpulse-backend-lzs6.onrender.com/"}\"")
     }
     debug {
       signingConfig = signingConfigs.getByName("debugConfig")
-      buildConfigField("String", "DEFAULT_API_BASE_URL", "\"${System.getenv("MARKETPULSE_API_URL") ?: "http://10.0.2.2:8080/"}\"")
+      buildConfigField("String", "DEFAULT_API_BASE_URL", "\"${System.getenv("MARKETPULSE_API_URL") ?: "https://marketpulse-backend-lzs6.onrender.com/"}\"")
     }
   }
   compileOptions {

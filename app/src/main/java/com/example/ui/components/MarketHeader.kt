@@ -333,16 +333,32 @@ fun MarketHeader(
 
 @Composable
 fun IndexCard(indexItem: MarketIndex, modifier: Modifier = Modifier) {
-  val isPositive = indexItem.changeValue >= 0
-  val changeColor = if (isPositive) GainEmerald else LossCrimson
+  val isUnavailable = indexItem.dataFreshnessStatus.equals("UNAVAILABLE", ignoreCase = true) ||
+                      indexItem.tradingStatus.equals("UNAVAILABLE", ignoreCase = true) ||
+                      indexItem.provider.contains("LICENSED_PROVIDER_REQUIRED", ignoreCase = true) ||
+                      indexItem.currentValue <= 0.0
+
+  val isPositive = !isUnavailable && indexItem.changeValue >= 0
+  val changeColor = when {
+    isUnavailable -> TextMuted
+    isPositive -> GainEmerald
+    else -> LossCrimson
+  }
   val sign = if (isPositive) "+" else ""
 
-  val statusColor = when (indexItem.tradingStatus.uppercase()) {
-    "LIVE" -> GainEmerald
-    "DELAYED" -> RegulatoryAmber
-    "DEMO" -> CyanTeal
-    "STALE" -> TextMuted
-    else -> LossCrimson
+  val statusColor = when {
+    isUnavailable -> RegulatoryAmber
+    indexItem.tradingStatus.equals("LIVE", ignoreCase = true) -> GainEmerald
+    indexItem.tradingStatus.equals("DELAYED", ignoreCase = true) -> RegulatoryAmber
+    indexItem.tradingStatus.equals("LAST_CLOSE", ignoreCase = true) -> SecondaryBlue
+    indexItem.tradingStatus.equals("DEMO", ignoreCase = true) -> CyanTeal
+    else -> TextMuted
+  }
+
+  val statusLabel = when {
+    isUnavailable -> "LICENSE REQD"
+    indexItem.tradingStatus.equals("LAST_CLOSE", ignoreCase = true) -> "LAST CLOSE"
+    else -> indexItem.tradingStatus.uppercase()
   }
 
   Surface(
@@ -374,7 +390,7 @@ fun IndexCard(indexItem: MarketIndex, modifier: Modifier = Modifier) {
               .padding(horizontal = 4.dp, vertical = 1.dp)
           ) {
             Text(
-              text = indexItem.tradingStatus,
+              text = statusLabel,
               style = MaterialTheme.typography.labelSmall.copy(
                 fontSize = 7.sp,
                 fontWeight = FontWeight.Bold,
@@ -384,35 +400,56 @@ fun IndexCard(indexItem: MarketIndex, modifier: Modifier = Modifier) {
           }
         }
 
-        Text(
-          text = String.format(Locale.US, "%,.2f", indexItem.currentValue),
-          style = MaterialTheme.typography.bodyMedium.copy(
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-            color = TextPrimary,
-            fontSize = 12.sp
+        if (isUnavailable) {
+          Text(
+            text = "Data unavailable",
+            style = MaterialTheme.typography.bodyMedium.copy(
+              fontWeight = FontWeight.Bold,
+              color = TextMuted,
+              fontSize = 11.sp
+            )
           )
-        )
-        Text(
-          text = "$sign${String.format(Locale.US, "%.2f", indexItem.changeValue)} ($sign${String.format(Locale.US, "%.2f", indexItem.changePercent)}%)",
-          style = MaterialTheme.typography.labelSmall.copy(
-            fontWeight = FontWeight.SemiBold,
-            color = changeColor,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 9.sp
+          Text(
+            text = "License required",
+            style = MaterialTheme.typography.labelSmall.copy(
+              fontWeight = FontWeight.Medium,
+              color = RegulatoryAmber,
+              fontSize = 8.sp
+            )
           )
-        )
+        } else {
+          Text(
+            text = String.format(Locale.US, "%,.2f", indexItem.currentValue),
+            style = MaterialTheme.typography.bodyMedium.copy(
+              fontWeight = FontWeight.Bold,
+              fontFamily = FontFamily.Monospace,
+              color = TextPrimary,
+              fontSize = 12.sp
+            )
+          )
+          Text(
+            text = "$sign${String.format(Locale.US, "%.2f", indexItem.changeValue)} ($sign${String.format(Locale.US, "%.2f", indexItem.changePercent)}%)",
+            style = MaterialTheme.typography.labelSmall.copy(
+              fontWeight = FontWeight.SemiBold,
+              color = changeColor,
+              fontFamily = FontFamily.Monospace,
+              fontSize = 9.sp
+            )
+          )
+        }
       }
 
-      Spacer(modifier = Modifier.width(8.dp))
+      if (!isUnavailable) {
+        Spacer(modifier = Modifier.width(8.dp))
 
-      SparklineChart(
-        dataPoints = parseSparkline(indexItem.sparklineJson),
-        isPositive = isPositive,
-        modifier = Modifier
-          .width(48.dp)
-          .height(24.dp)
-      )
+        SparklineChart(
+          dataPoints = parseSparkline(indexItem.sparklineJson),
+          isPositive = isPositive,
+          modifier = Modifier
+            .width(48.dp)
+            .height(24.dp)
+        )
+      }
     }
   }
 }
